@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>FantCraft</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: white; user-select: none; }
+        
+        /* ГЛАВНОЕ МЕНЮ */
+        .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 1000; transition: 0.5s; background: linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.4)), #2c3e50; }
+        .logo-container { position: relative; margin-bottom: 50px; text-align: center; }
+        .logo { font-size: 100px; font-weight: 900; color: #2ecc71; text-shadow: 8px 8px 0px #1b2631; animation: pulse 2s infinite ease-in-out; letter-spacing: 5px; }
+        .splash { position: absolute; right: -50px; bottom: 0; color: #f1c40f; font-weight: bold; font-size: 20px; transform: rotate(-20deg); animation: splash-pulse 0.5s infinite alternate; pointer-events: none; }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+        @keyframes splash-pulse { from { transform: rotate(-20deg) scale(1); } to { transform: rotate(-20deg) scale(1.1); } }
+
+        .menu-btns { display: flex; flex-direction: column; gap: 15px; }
+        .menuBtn { 
+            width: 320px; padding: 18px; background: #34495e; border: 4px solid #2c3e50; 
+            color: white; cursor: pointer; text-align: center; font-weight: bold; font-size: 18px; 
+            text-transform: uppercase; transition: 0.2s; box-shadow: 0 6px 0 #1a252f;
+        }
+        .menuBtn:hover { background: #3e5871; transform: translateY(-2px); box-shadow: 0 8px 0 #1a252f; border-color: #ecf0f1; }
+        .menuBtn:active { transform: translateY(4px); box-shadow: 0 2px 0 #1a252f; }
+
+        /* ИГРА */
+        #gameInterface { display: none; position: relative; width: 100%; height: 100%; }
+        
+        /* КНОПКА МЕНЮ В ИГРЕ */
+        .ingame-menu-btn {
+            position: absolute; top: 20px; right: 20px; padding: 10px 20px;
+            background: rgba(0,0,0,0.6); border: 2px solid #fff; color: white;
+            font-weight: bold; cursor: pointer; transition: 0.2s; z-index: 2000;
+        }
+        .ingame-menu-btn:hover { background: #e74c3c; border-color: #c0392b; }
+
+        #hotbar { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; background: rgba(0,0,0,0.8); padding: 5px; border: 3px solid #fff; gap: 8px; border-radius: 4px; }
+        .slot { width: 50px; height: 50px; border: 3px solid #555; cursor: pointer; background-size: cover; image-rendering: pixelated; position: relative; }
+        .slot.active { border-color: #2ecc71; transform: scale(1.1); }
+        #gameCanvas { image-rendering: pixelated; width: 100%; height: 100%; display: block; }
+    </style>
+</head>
+<body>
+
+<div id="mainMenu" class="ui-layer">
+    <div class="logo-container">
+        <div class="logo">FANTCRAFT</div>
+        <div id="splash" class="splash">ЗАГРУЗКА...</div>
+    </div>
+    <div class="menu-btns">
+        <div class="menuBtn" onclick="startGame()">Одиночная игра</div>
+        <div class="menuBtn" style="opacity: 0.5; cursor: not-allowed;">Сетевая игра (Soon)</div>
+        <div class="menuBtn" onclick="location.reload()">Обновить</div>
+    </div>
+</div>
+
+<div id="gameInterface">
+    <div class="ingame-menu-btn" onclick="returnToMenu()">МЕНЮ (ESC)</div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="hotbar"></div>
+</div>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const blockSize = 40;
+    
+    let isPlaying = false;
+    let keys = {};
+    const world = {}; 
+    const waterLife = {}; 
+    const inventory = [1, 2, 3, 4, 5, 6]; 
+    let selectedIdx = 0;
+    const blockCanvases = {};
+
+    let audioCtx;
+    function playPlaceSound() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.1);
+    }
+
+    const blocks = {
+        0: { name: "Air", solid: false },
+        1: { name: "Grass", solid: true, c1: "#2ecc71", c2: "#795548" },
+        2: { name: "Dirt", solid: true, c1: "#795548", c2: "#5d4037" },
+        3: { name: "Stone", solid: true, c1: "#95a5a6", c2: "#7f8c8d" },
+        4: { name: "Wood", solid: true, c1: "#a04000", c2: "#5e270e" },
+        5: { name: "Water", solid: false, liquid: true, c1: "#3498db", c2: "rgba(255,255,255,0.3)" },
+        6: { name: "Leaves", solid: true, c1: "#1e8449", c2: "#145a32" }
+    };
+
+    const splashes = ["ЛУЧШАЯ ИГРА!", "КОПАЙ!", "КРУТИ КОЛЕСИКО!", "ЦУНАМИ ИЗ ВОДЫ!", "ПОЧТИ MINECRAFT!", "ТВОЯ ФАНТАЗИЯ!", "ДЕРЕВЬЯ РАСТУТ!"];
+    document.getElementById('splash').innerText = splashes[Math.floor(Math.random()*splashes.length)];
+
+    function generateTextures() {
+        for (let id in blocks) {
+            if (id == 0) continue;
+            const tCanvas = document.createElement("canvas");
+            const tCtx = tCanvas.getContext("2d");
+            tCanvas.width = blockSize; tCanvas.height = blockSize;
+            const b = blocks[id];
+            tCtx.fillStyle = b.c1; tCtx.fillRect(0,0,40,40);
+            if(id == 1) { tCtx.fillStyle = b.c2; tCtx.fillRect(0,12,40,28); }
+            if(id != 5) { tCtx.strokeStyle = "rgba(0,0,0,0.2)"; tCtx.strokeRect(0,0,40,40); }
+            blockCanvases[id] = tCanvas;
+        }
+    }
+
+    function getTileID(x, y) {
+        const key = `${x},${y}`;
+        if (world[key] !== undefined) return world[key];
+        let h = Math.floor(Math.sin(x * 0.1) * 5 + 15);
+        let id = (y > h + 5) ? 3 : (y > h) ? 2 : (y === h) ? 1 : 0;
+        world[key] = id;
+        if (id === 1 && Math.random() > 0.97) {
+            setTimeout(() => {
+                for(let i=1; i<=4; i++) world[`${x},${y-i}`] = 4;
+                for(let ox=-2; ox<=2; ox++) for(let oy=-6; oy<=-4; oy++) {
+                    let lk = `${x+ox},${y+oy}`; if(!world[lk]) world[lk] = 6;
+                }
+            }, 0);
+        }
+        return id;
+    }
+
+    function tickWater() {
+        if (!isPlaying) return;
+        let updates = [];
+        for (let key in world) {
+            if (world[key] === 5) {
+                let [x, y] = key.split(',').map(Number);
+                let life = waterLife[key] || 3;
+                if (getTileID(x, y + 1) === 0) updates.push({x, y: y+1, life: 3});
+                else if (life > 1) {
+                    if (getTileID(x+1, y) === 0) updates.push({x: x+1, y, life: life - 1});
+                    if (getTileID(x-1, y) === 0) updates.push({x: x-1, y, life: life - 1});
+                }
+            }
+        }
+        updates.forEach(upd => {
+            let k = `${upd.x},${upd.y}`;
+            if (world[k] === 0) { world[k] = 5; waterLife[k] = upd.life; }
+        });
+    }
+    setInterval(tickWater, 100);
+
+    const player = { x: 400, y: 0, w: 20, h: 48, vx: 0, vy: 0, speed: 4, jump: 10, gravity: 0.5, grounded: false, headYaw: 0 };
+    const camera = { x: 0, y: 0 };
+    let mouseX = 0, mouseY = 0, animTime = 0, walkAmplitude = 0, isDigging = false, digAnimTimer = 0;
+
+    function isColliding(px, py) {
+        for (let x = Math.floor(px/40); x <= Math.floor((px+player.w)/40); x++) {
+            for (let y = Math.floor(py/40); y <= Math.floor((py+player.h)/40); y++) {
+                if (blocks[getTileID(x, y)].solid) return true;
+            }
+        }
+        return false;
+    }
+
+    function update() {
+        if (!isPlaying) return;
+        player.vx = 0;
+        if (keys['KeyA']) player.vx = -player.speed;
+        if (keys['KeyD']) player.vx = player.speed;
+        player.x += player.vx;
+        if (isColliding(player.x, player.y)) player.x -= player.vx;
+
+        let tx = Math.floor((player.x + 10) / 40);
+        let ty = Math.floor((player.y + 24) / 40);
+        let inWater = blocks[getTileID(tx, ty)].liquid;
+
+        if (inWater) {
+            player.vy = Math.min(player.vy, 1.2);
+            if (keys['Space'] || keys['KeyW']) player.vy = -4.5; else player.vy += 0.15;
+            if (player.vx !== 0 && isColliding(player.x + player.vx, player.y)) player.vy = -5; 
+        } else {
+            if (player.grounded && (keys['Space'] || keys['KeyW'])) { player.vy = -player.jump; player.grounded = false; }
+            player.vy += player.gravity;
+        }
+
+        player.y += player.vy;
+        player.grounded = false;
+        if (isColliding(player.x, player.y)) {
+            if (player.vy > 0) { player.y = Math.floor((player.y + player.h) / 40) * 40 - player.h - 0.01; player.grounded = true; }
+            else if (player.vy < 0) { player.y = Math.floor(player.y / 40) * 40 + 40 + 0.01; }
+            player.vy = 0;
+        }
+
+        if (player.vx !== 0) { walkAmplitude = Math.min(walkAmplitude + 0.1, 1); animTime += 0.2; }
+        else walkAmplitude = Math.max(walkAmplitude - 0.15, 0);
+
+        player.headYaw = Math.atan2(mouseY - (player.y + 12 - camera.y), mouseX - (player.x + 10 - camera.x));
+        camera.x = player.x - canvas.width/2; 
+        camera.y = player.y - canvas.height/2;
+        if (isDigging) { digAnimTimer++; if (digAnimTimer > 10) { isDigging = false; digAnimTimer = 0; } }
+    }
+
+    function drawPart(ctx, x, y, w, h, color, angle, px, py) {
+        ctx.save(); ctx.translate((x + px) | 0, (y + py) | 0); ctx.rotate(angle);
+        ctx.fillStyle = color; ctx.fillRect((-px) | 0, (-py) | 0, w | 0, h | 0);
+        ctx.strokeStyle = "rgba(0,0,0,0.2)"; ctx.strokeRect((-px) | 0, (-py) | 0, w | 0, h | 0); ctx.restore();
+    }
+
+    function draw() {
+        ctx.fillStyle = "#87CEEB"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        const camX = camera.x | 0, camY = camera.y | 0;
+        const sX = Math.floor(camX/40), eX = sX + Math.ceil(canvas.width/40)+1;
+        const sY = Math.floor(camY/40), eY = sY + Math.ceil(canvas.height/40)+1;
+        for (let x = sX; x < eX; x++) {
+            for (let y = sY; y < eY; y++) {
+                let id = getTileID(x, y); 
+                if (id !== 0) ctx.drawImage(blockCanvases[id], (x*40 - camX) | 0, (y*40 - camY) | 0);
+            }
+        }
+        let pX = (player.x | 0) - camX, pY = (player.y | 0) - camY;
+        let isFlipped = (mouseX < pX + 10);
+        let swing = Math.sin(animTime) * 0.7 * walkAmplitude;
+        ctx.save();
+        if (isFlipped) { ctx.translate(pX + 20, pY); ctx.scale(-1, 1); pX = 0; pY = 0; }
+        drawPart(ctx, pX+4, pY+30, 6, 18, "#2e4053", swing, 3, 2); 
+        drawPart(ctx, pX+10, pY+30, 6, 18, "#2e4053", -swing, 3, 2); 
+        ctx.fillStyle = "#34495e"; ctx.fillRect(pX+3, pY+16, 14, 16);
+        drawPart(ctx, pX+1, pY+17, 4, 15, "#f5cba7", swing * 0.5, 2, 2); 
+        drawPart(ctx, pX+15, pY+17, 4, 15, "#f5cba7", isDigging ? -1.5 + Math.sin(digAnimTimer*0.5) : -swing * 0.5, 2, 2); 
+        ctx.save(); ctx.translate(pX+10, pY+10);
+        ctx.rotate(isFlipped ? Math.PI - player.headYaw : player.headYaw);
+        ctx.fillStyle = "#f5cba7"; ctx.fillRect(-7, -9, 14, 16);
+        ctx.fillStyle = "#333"; ctx.fillRect(3, -4, 2, 2);
+        ctx.restore(); ctx.restore();
+    }
+
+    canvas.onmousedown = (e) => {
+        if (!isPlaying) return;
+        let bx = Math.floor((e.clientX + camera.x)/40), by = Math.floor((e.clientY + camera.y)/40);
+        if (e.button === 0) { isDigging = true; digAnimTimer = 0; world[`${bx},${by}`] = 0; }
+        else if (e.button === 2) {
+            let overlapsPlayer = (bx*40 < player.x+player.w && bx*40+40 > player.x && by*40 < player.y+player.h && by*40+40 > player.y);
+            if (getTileID(bx, by) === 0 && !overlapsPlayer) { 
+                world[`${bx},${by}`] = inventory[selectedIdx]; 
+                if(inventory[selectedIdx] == 5) waterLife[`${bx},${by}`] = 3;
+                isDigging = true; digAnimTimer = 0; playPlaceSound();
+            }
+        }
+    };
+
+    window.addEventListener('wheel', e => {
+        if (!isPlaying) return; e.preventDefault();
+        selectedIdx = (e.deltaY > 0) ? (selectedIdx + 1) % 6 : (selectedIdx + 5) % 6; setupHotbar();
+    }, { passive: false });
+
+    window.addEventListener('keydown', e => { 
+        keys[e.code] = true; 
+        if (e.code === 'Escape') returnToMenu(); // Выход по кнопке ESC
+    });
+    window.addEventListener('keyup', e => keys[e.code] = false);
+    window.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+    document.addEventListener('contextmenu', e => e.preventDefault());
+
+    function setupHotbar() {
+        const hb = document.getElementById("hotbar"); hb.innerHTML = "";
+        inventory.forEach((id, i) => {
+            let s = document.createElement("div"); s.className = "slot" + (i === selectedIdx ? " active" : "");
+            s.style.backgroundImage = `url(${blockCanvases[id].toDataURL()})`;
+            s.onclick = () => { selectedIdx = i; setupHotbar(); };
+            hb.appendChild(s);
+        });
+    }
+
+    function startGame() { 
+        document.getElementById("mainMenu").style.display = "none"; 
+        document.getElementById("gameInterface").style.display = "block"; 
+        canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+        generateTextures();
+        if (Object.keys(world).length < 10) { // Генерация только если мир пустой
+            let startX = 10, startY = 0;
+            while(blocks[getTileID(startX, startY)].solid || blocks[getTileID(startX, startY+1)].solid === false) { startY++; if(startY > 100) break; }
+            player.x = startX * 40; player.y = (startY - 2) * 40;
+        }
+        setupHotbar(); isPlaying = true; requestAnimationFrame(loop); 
+    }
+
+    function returnToMenu() {
+        isPlaying = false;
+        document.getElementById("gameInterface").style.display = "none";
+        document.getElementById("mainMenu").style.display = "flex";
+        // Обновляем splash фразу при возврате
+        document.getElementById('splash').innerText = splashes[Math.floor(Math.random()*splashes.length)];
+    }
+
+    function loop() { if (isPlaying) { update(); draw(); requestAnimationFrame(loop); } }
+</script>
+</body>
+</html>
